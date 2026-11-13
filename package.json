@@ -1,0 +1,10 @@
+{
+  "name": "tinycalc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check:examples": "node scripts/examples.js | grep -v '^#'"
+  }
+}

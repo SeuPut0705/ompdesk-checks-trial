@@ -1,0 +1,108 @@
+# tinycalc's checks. A push to main runs the Linux job; a dispatch can also ask for macOS (`mac`), which the
+# gate (queue-gate.yml) admits only from main or a MAC_REFS branch, with an admission ticket once
+# CHECKS_ADMISSION_DEVICES names a computer.
+name: ci
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('ci [{0}]', format('{0}{1}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '')) || '' }}
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: "Run the Linux checks a push to main runs, on this ref"
+        type: boolean
+        default: false
+      mac:
+        description: "Also run the macOS checks"
+        type: boolean
+        default: false
+      force:
+        description: "Run even when this commit already has a green run with these inputs"
+        type: boolean
+        default: false
+      ticket:
+        description: "Admission ticket for a macOS dispatch (queue-gate.yml); not in the run name"
+        type: string
+        default: ""
+
+concurrency:
+  group: ${{ github.event_name == 'push' && 'ci-main' || format('ci-{0}-{1}', github.ref, format('{0}{1}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '')) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/queue-gate.yml
+    with:
+      workflow: ci.yml
+      mac: ${{ inputs.mac }}
+      mac-refs: ${{ vars.MAC_REFS }}
+      force: ${{ inputs.force }}
+      ticket: ${{ inputs.ticket }}
+      admission-devices: ${{ vars.CHECKS_ADMISSION_DEVICES }}
+    secrets: inherit
+
+  linux:
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result == 'success' || needs.gate.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: |
+          mkdir -p test-report
+          node --test --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=junit --test-reporter-destination=test-report/junit.xml
+      - name: Upload the test report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-report-${{ job.check_run_id }}
+          path: test-report/
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Documented examples
+        run: npm run check:examples
+      - name: Integration
+        run: node scripts/integration.js
+
+  macos:
+    needs: gate
+    if: ${{ needs.gate.outputs.mac_ok == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: |
+          mkdir -p test-report
+          node --test --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=junit --test-reporter-destination=test-report/junit.xml
+      - name: Upload the test report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-report-${{ job.check_run_id }}
+          path: test-report/
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Documented examples
+        run: npm run check:examples
